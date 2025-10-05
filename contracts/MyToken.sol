@@ -20,8 +20,8 @@ contract WrappedHive is ERC20, ERC20Permit {
     // Don't use multisig until we set this to true - Used for testing
     bool public multisig = false;
     // This depends on how many signers we end up having
-    // I feel 60% would be fine - might be worth having a function to change it later
-    uint8 public constant multisigThreshold = 60;
+    // I feel 51% would be fine - might be worth having a function to change it later
+    uint8 public constant multisigThreshold = 51;
 
     uint256 public nonceAddSigner = 0;
     uint256 public nonceRemoveSigner = 0;
@@ -29,15 +29,16 @@ contract WrappedHive is ERC20, ERC20Permit {
     // We need this event to log the username for unwrapping
     event Unwrap(address messenger, uint64 amount, string username);
 
-    constructor()
-        ERC20("Wrapped HIVE (hive.io)", "wHIVE")
-        ERC20Permit("Wrapped HIVE (hive.io)")
+    constructor(string memory name, string memory symbol)
+        ERC20(name, symbol)
+        ERC20Permit(name)
     {
-        address smarttrailAddress = address(
-            0xaDED1170927F2f3a7DC6868Ecc19488e0d9472D3
+        // use hive account bridge2 as initial signer
+        address initAddress = address(
+            0xdaFee37b351Db49C3F3D1C01e75fbbbAbA65e68c
         );
-        signers.push(smarttrailAddress);
-        signerNames[smarttrailAddress] = "smarttrail";
+        signers.push(initAddress);
+        signerNames[initAddress] = "bridge2";
     }
 
     // For testing - later enable multisig for more testing
