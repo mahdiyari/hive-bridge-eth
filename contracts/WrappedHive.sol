@@ -6,11 +6,12 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 
 contract WrappedHive is ERC20, ERC20Permit {
     // Only mint once per hive (trx_id, op_in_trx)
-    mapping(string trx_id => mapping(uint32 op_in_trx => bool)) public hasMinted;
+    mapping(string trx_id => mapping(uint32 op_in_trx => bool))
+        public hasMinted;
 
     // Storing signers for multisig
     address[] public signers;
-    mapping(address => string) public signerNames;
+    mapping(address ethAddress => string hiveUsername) public signerNames;
     // Using this struct to return signers data
     struct signerInfo {
         string username;
@@ -18,12 +19,12 @@ contract WrappedHive is ERC20, ERC20Permit {
     }
 
     // Require this number of signatures
-    uint8 public multisigThreshold = 1;
+    uint8 public multisigThreshold;
 
     // Using nonces to prevent replay attacks
-    uint256 public nonceAddSigner = 0;
-    uint256 public nonceRemoveSigner = 0;
-    uint256 public nonceUpdateThreshold = 0;
+    uint256 public nonceAddSigner;
+    uint256 public nonceRemoveSigner;
+    uint256 public nonceUpdateThreshold;
 
     // We need this event to log the username for unwrapping
     event Unwrap(address messenger, uint256 amount, string username);
@@ -37,6 +38,11 @@ contract WrappedHive is ERC20, ERC20Permit {
         string memory name,
         string memory symbol
     ) ERC20(name, symbol) ERC20Permit(name) {
+        multisigThreshold = 1;
+        nonceAddSigner = 0;
+        nonceRemoveSigner = 0;
+        nonceUpdateThreshold = 0;
+
         // Use hive account bridge2 as initial signer
         address initAddress = address(
             0xdaFee37b351Db49C3F3D1C01e75fbbbAbA65e68c
@@ -45,7 +51,9 @@ contract WrappedHive is ERC20, ERC20Permit {
         signerNames[initAddress] = "bridge2";
     }
 
-    // signed message: updateMultisigThreshold;newThreshold;nonceUpdateThreshold;contract
+    /// Update the value of multisigThreshold
+    /// @param newThreshold positive value lower than the total number of signers
+    /// @param signatures signed message: "updateMultisigThreshold";newThreshold;nonceUpdateThreshold;contract
     function updateMultisigThreshold(
         uint8 newThreshold,
         bytes[] memory signatures
@@ -72,7 +80,10 @@ contract WrappedHive is ERC20, ERC20Permit {
         nonceUpdateThreshold++;
     }
 
-    // signed message: addSigner;addr;username;nonceAddSigner;contract
+    /// Add new signer
+    /// @param addr Ethereum address of the signer derived from their public active key
+    /// @param username Hive username of the signer
+    /// @param signatures signed message: "addSigner";addr;username;nonceAddSigner;contract
     function addSigner(
         address addr,
         string memory username,
@@ -99,7 +110,9 @@ contract WrappedHive is ERC20, ERC20Permit {
         emit SignerAdded(addr, username);
     }
 
-    // signed message: removeSigner;addr;nonceRemoveSigner;contract
+    /// Remove a signer
+    /// @param addr Ethereum address of the signer
+    /// @param signatures signed message: "removeSigner";addr;nonceRemoveSigner;contract
     function removeSigner(address addr, bytes[] memory signatures) public {
         bytes32 msgHash = keccak256(
             abi.encodePacked(
@@ -132,7 +145,11 @@ contract WrappedHive is ERC20, ERC20Permit {
         nonceRemoveSigner++;
     }
 
-    // signed message: wrap;address;amount;trx_id;op_in_trx;contract
+    /// Mint new tokens
+    /// @param amount token amount without decimals "1.000 HIVE" => 1000
+    /// @param trx_id trx_id from the Hive transaction
+    /// @param op_in_trx op_in_trx from the Hive transaction
+    /// @param signatures signed message: "wrap";address;amount;trx_id;op_in_trx;contract
     function wrap(
         uint256 amount,
         string memory trx_id,
@@ -155,21 +172,20 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(amount > 0, "Amount must be positive.");
-        require(op_in_trx >= 0, "op_in_trx can't be negative.");
         require(
             !hasMinted[trx_id][op_in_trx],
-            "Already minted with this blockNum"
+            "Already minted with this (trx_id, op_in_trx)"
         );
         hasMinted[trx_id][op_in_trx] = true;
         _mint(_msgSender(), amount);
     }
 
-    // Burn the tokens and emit an Unwrap event that will be picked up by the bridge nodes
+    /// Burn the tokens and emit an Unwrap event that will be picked up by the bridge nodes
+    /// @param amount token amount without decimals "1.000 HIVE" => 1000
+    /// @param username Hive username that will receive the native tokens
     function unwrap(uint256 amount, string memory username) public {
         uint256 len = bytes(username).length;
         require(len >= 3 && len <= 16, "Username must be 3-16 characters long");
-        require(amount > 0, "Amount must be positive");
         _burn(_msgSender(), amount);
         emit Unwrap(_msgSender(), amount, username);
     }
@@ -179,6 +195,7 @@ contract WrappedHive is ERC20, ERC20Permit {
         return 3;
     }
 
+    /// Returns all the signers with their Hive username
     function getAllSigners() public view returns (signerInfo[] memory) {
         signerInfo[] memory signerInfos = new signerInfo[](signers.length);
         for (uint256 i = 0; i < signers.length; i++) {
@@ -242,7 +259,6 @@ contract WrappedHive is ERC20, ERC20Permit {
         bytes memory sig
     ) internal pure returns (uint8 v, bytes32 r, bytes32 s) {
         require(sig.length == 65);
-
         assembly {
             // first 32 bytes, after the length prefix.
             r := mload(add(sig, 32))
@@ -251,7 +267,6 @@ contract WrappedHive is ERC20, ERC20Permit {
             // final byte (first byte of the next 32 bytes).
             v := byte(0, mload(add(sig, 96)))
         }
-
         return (v, r, s);
     }
 
