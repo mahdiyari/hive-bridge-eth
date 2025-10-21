@@ -80,7 +80,10 @@ contract WrappedHive is ERC20, ERC20Permit {
             newThreshold <= signers.length,
             "multisigThreshold must be less than or equal to signers.length"
         );
-        require(newThreshold != multisigThreshold, "multisigThreshold is already set to the value requested.");
+        require(
+            newThreshold != multisigThreshold,
+            "multisigThreshold is already set to the value requested."
+        );
         emit MultisigThresholdUpdated(multisigThreshold, newThreshold);
         multisigThreshold = newThreshold;
         nonceUpdateThreshold++;
@@ -132,7 +135,10 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(bytes(signerNames[addr]).length > 0, "Address is not a signer.");
+        require(
+            bytes(signerNames[addr]).length > 0,
+            "Address is not a signer."
+        );
         uint256 signerCount = signers.length;
         require(
             signerCount - 1 >= multisigThreshold,
@@ -221,12 +227,17 @@ contract WrappedHive is ERC20, ERC20Permit {
     ) internal view returns (bool) {
         uint256 signatureCount = signatures.length;
         uint8 threshold = multisigThreshold;
+        uint256 signerCount = signers.length;
         require(
             signatureCount >= threshold,
             "Not enought signatures to satisfy multisigThreshold."
         );
+        require(
+            signatureCount <= signerCount,
+            "signatureCount shouldn't be higher than signerCount"
+        );
         uint256 validSignatures;
-        address[] memory seen = new address[](signers.length);
+        address[] memory seen = new address[](signerCount);
         uint256 seenCount = 0;
         for (uint256 i = 0; i < signatureCount; i++) {
             address recovered = _recoverSigner(messageHash, signatures[i]);
@@ -264,7 +275,7 @@ contract WrappedHive is ERC20, ERC20Permit {
         bytes32 message,
         bytes memory sig
     ) internal pure returns (address) {
-        require(sig.length == 65);
+        require(sig.length == 65, "Signatures must be 65 characters long.");
         uint8 v;
         bytes32 r;
         bytes32 s;
