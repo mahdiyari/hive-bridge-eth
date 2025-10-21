@@ -34,6 +34,12 @@ contract WrappedHive is ERC20, ERC20Permit {
     event SignerRemoved(address indexed signer, string username);
     event MultisigThresholdUpdated(uint8 oldThreshold, uint8 newThreshold);
 
+    // Cache address(this) to save gas?
+    address contractAddress = address(this);
+
+    // Throw this error when can't verify the signatures
+    error InvalidSignatures();
+
     constructor(
         string memory name,
         string memory symbol
@@ -66,7 +72,7 @@ contract WrappedHive is ERC20, ERC20Permit {
                 ";",
                 nonceUpdateThreshold,
                 ";",
-                address(this)
+                contractAddress
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -74,7 +80,7 @@ contract WrappedHive is ERC20, ERC20Permit {
             newThreshold <= signers.length,
             "multisigThreshold must be less than or equal to signers.length"
         );
-        require(newThreshold > 0, "multisigThreshold must be positive");
+        require(newThreshold != multisigThreshold, "multisigThreshold is already set to the value requested.");
         emit MultisigThresholdUpdated(multisigThreshold, newThreshold);
         multisigThreshold = newThreshold;
         nonceUpdateThreshold++;
@@ -99,11 +105,12 @@ contract WrappedHive is ERC20, ERC20Permit {
                 ";",
                 nonceAddSigner,
                 ";",
-                address(this)
+                contractAddress
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(!_isSigner(addr), "Already a signer.");
+        bool isSigner = bytes(signerNames[addr]).length > 0;
+        require(!isSigner, "Already a signer.");
         signers.push(addr);
         signerNames[addr] = username;
         nonceAddSigner++;
@@ -122,21 +129,23 @@ contract WrappedHive is ERC20, ERC20Permit {
                 ";",
                 nonceRemoveSigner,
                 ";",
-                address(this)
+                contractAddress
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(_isSigner(addr), "Address is not a signer.");
+        bool isSigner = bytes(signerNames[addr]).length > 0;
+        require(isSigner, "Address is not a signer.");
+        uint256 signerCount = signers.length;
         require(
-            signers.length - 1 >= multisigThreshold,
+            signerCount - 1 >= multisigThreshold,
             "multisigThreshold can't be higher than signers.length"
         );
         emit SignerRemoved(addr, signerNames[addr]);
         delete signerNames[addr];
-        for (uint256 i = 0; i < signers.length; i++) {
+        for (uint256 i = 0; i < signerCount; i++) {
             if (signers[i] == addr) {
                 // replace with last
-                signers[i] = signers[signers.length - 1];
+                signers[i] = signers[signerCount - 1];
                 // remove last
                 signers.pop();
                 break;
@@ -168,7 +177,7 @@ contract WrappedHive is ERC20, ERC20Permit {
                 ";",
                 op_in_trx,
                 ";",
-                address(this)
+                contractAddress
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -197,8 +206,9 @@ contract WrappedHive is ERC20, ERC20Permit {
 
     /// Returns all the signers with their Hive username
     function getAllSigners() public view returns (signerInfo[] memory) {
-        signerInfo[] memory signerInfos = new signerInfo[](signers.length);
-        for (uint256 i = 0; i < signers.length; i++) {
+        uint256 singerCount = signers.length;
+        signerInfo[] memory signerInfos = new signerInfo[](singerCount);
+        for (uint256 i = 0; i < singerCount; i++) {
             address signer = signers[i];
             string memory username = signerNames[signer];
             signerInfos[i] = signerInfo({addr: signer, username: username});
@@ -220,8 +230,9 @@ contract WrappedHive is ERC20, ERC20Permit {
         uint256 seenCount = 0;
         for (uint256 i = 0; i < signatures.length; i++) {
             address recovered = _recoverSigner(messageHash, signatures[i]);
+            bool isSigner = bytes(signerNames[recovered]).length > 0;
             if (
-                _isSigner(recovered) &&
+                isSigner &&
                 !_alreadySeen(seen, seenCount, recovered)
             ) {
                 seen[seenCount] = recovered;
@@ -232,12 +243,7 @@ contract WrappedHive is ERC20, ERC20Permit {
                 }
             }
         }
-        revert("Invalid signatures");
-    }
-
-    // Is the address a registered signer?
-    function _isSigner(address addr) internal view returns (bool) {
-        return bytes(signerNames[addr]).length > 0;
+        revert InvalidSignatures();
     }
 
     // Find out if we have already seen a signer
@@ -254,11 +260,15 @@ contract WrappedHive is ERC20, ERC20Permit {
         return false;
     }
 
-    // Split a signature to v,r,s
-    function _splitSignature(
+    // recover address from msg and signature
+    function _recoverSigner(
+        bytes32 message,
         bytes memory sig
-    ) internal pure returns (uint8 v, bytes32 r, bytes32 s) {
+    ) internal pure returns (address) {
         require(sig.length == 65);
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
         assembly {
             // first 32 bytes, after the length prefix.
             r := mload(add(sig, 32))
@@ -267,15 +277,6 @@ contract WrappedHive is ERC20, ERC20Permit {
             // final byte (first byte of the next 32 bytes).
             v := byte(0, mload(add(sig, 96)))
         }
-        return (v, r, s);
-    }
-
-    // recover address from msg and signature
-    function _recoverSigner(
-        bytes32 message,
-        bytes memory sig
-    ) internal pure returns (address) {
-        (uint8 v, bytes32 r, bytes32 s) = _splitSignature(sig);
         return ecrecover(message, v, r, s);
     }
 }
