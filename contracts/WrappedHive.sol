@@ -109,8 +109,7 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        bool isSigner = bytes(signerNames[addr]).length > 0;
-        require(!isSigner, "Already a signer.");
+        require(bytes(signerNames[addr]).length == 0, "Already a signer.");
         signers.push(addr);
         signerNames[addr] = username;
         nonceAddSigner++;
@@ -133,8 +132,7 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        bool isSigner = bytes(signerNames[addr]).length > 0;
-        require(isSigner, "Address is not a signer.");
+        require(bytes(signerNames[addr]).length > 0, "Address is not a signer.");
         uint256 signerCount = signers.length;
         require(
             signerCount - 1 >= multisigThreshold,
@@ -221,24 +219,25 @@ contract WrappedHive is ERC20, ERC20Permit {
         bytes32 messageHash,
         bytes[] memory signatures
     ) internal view returns (bool) {
+        uint256 signatureCount = signatures.length;
+        uint8 threshold = multisigThreshold;
         require(
-            signatures.length >= multisigThreshold,
+            signatureCount >= threshold,
             "Not enought signatures to satisfy multisigThreshold."
         );
         uint256 validSignatures;
         address[] memory seen = new address[](signers.length);
         uint256 seenCount = 0;
-        for (uint256 i = 0; i < signatures.length; i++) {
+        for (uint256 i = 0; i < signatureCount; i++) {
             address recovered = _recoverSigner(messageHash, signatures[i]);
-            bool isSigner = bytes(signerNames[recovered]).length > 0;
             if (
-                isSigner &&
+                bytes(signerNames[recovered]).length > 0 &&
                 !_alreadySeen(seen, seenCount, recovered)
             ) {
                 seen[seenCount] = recovered;
                 seenCount++;
                 validSignatures++;
-                if (validSignatures >= multisigThreshold) {
+                if (validSignatures >= threshold) {
                     return true;
                 }
             }
