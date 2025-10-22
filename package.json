@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "hardhat build"
+    "build": "hardhat build",
+    "test": "hardhat test nodejs"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.0.3",
