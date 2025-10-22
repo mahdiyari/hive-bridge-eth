@@ -42,19 +42,17 @@ contract WrappedHive is ERC20, ERC20Permit {
 
     constructor(
         string memory name,
-        string memory symbol
+        string memory symbol,
+        address initialSigner,
+        string memory initialUsername
     ) ERC20(name, symbol) ERC20Permit(name) {
         multisigThreshold = 1;
         nonceAddSigner = 0;
         nonceRemoveSigner = 0;
         nonceUpdateThreshold = 0;
-
-        // Use hive account bridge2 as initial signer
-        address initAddress = address(
-            0xdaFee37b351Db49C3F3D1C01e75fbbbAbA65e68c
-        );
-        signers.push(initAddress);
-        signerNames[initAddress] = "bridge2";
+        // Add one signer initially
+        signers.push(initialSigner);
+        signerNames[initialSigner] = initialUsername;
     }
 
     /// Update the value of multisigThreshold
@@ -240,7 +238,20 @@ contract WrappedHive is ERC20, ERC20Permit {
         address[] memory seen = new address[](signerCount);
         uint256 seenCount = 0;
         for (uint256 i = 0; i < signatureCount; i++) {
-            address recovered = _recoverSigner(messageHash, signatures[i]);
+            bytes memory sig = signatures[i];
+            require(sig.length == 65, "Signatures must be 65 characters long.");
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+            assembly {
+                // first 32 bytes, after the length prefix.
+                r := mload(add(sig, 32))
+                // second 32 bytes.
+                s := mload(add(sig, 64))
+                // final byte (first byte of the next 32 bytes).
+                v := byte(0, mload(add(sig, 96)))
+            }
+            address recovered = ecrecover(messageHash, v, r, s);
             if (
                 bytes(signerNames[recovered]).length > 0 &&
                 !_alreadySeen(seen, seenCount, recovered)
@@ -268,25 +279,5 @@ contract WrappedHive is ERC20, ERC20Permit {
             }
         }
         return false;
-    }
-
-    // recover address from msg and signature
-    function _recoverSigner(
-        bytes32 message,
-        bytes memory sig
-    ) internal pure returns (address) {
-        require(sig.length == 65, "Signatures must be 65 characters long.");
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-        assembly {
-            // first 32 bytes, after the length prefix.
-            r := mload(add(sig, 32))
-            // second 32 bytes.
-            s := mload(add(sig, 64))
-            // final byte (first byte of the next 32 bytes).
-            v := byte(0, mload(add(sig, 96)))
-        }
-        return ecrecover(message, v, r, s);
     }
 }
