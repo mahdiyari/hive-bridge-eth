@@ -1,67 +1,143 @@
-// SPDX-License-Identifier: GNU-GPL3.0
+// SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract WrappedHive is ERC20, ERC20Permit {
-    // Only mint once per hive (trx_id, op_in_trx)
+/// @title WrappedHive - A bridge token for HIVE blockchain
+/// @notice This contract implements a wrapped version of HIVE token with multisig governance
+/// @dev Implements ERC20, ERC20Permit for gasless approvals, and Pausable for emergency stops
+/// @dev No reentrancy protection needed - contract has no external calls or value transfers
+contract WrappedHive is ERC20, ERC20Permit, Pausable {
+    /// @notice Tracks whether tokens have been minted for a specific Hive transaction
+    /// @dev Prevents double-minting by tracking (trx_id, op_in_trx) combinations
     mapping(string trx_id => mapping(uint32 op_in_trx => bool))
         public hasMinted;
 
-    // Storing signers for multisig
+    /// @notice Array of authorized signers
     address[] public signers;
+
+    /// @notice Maps signer addresses to their Hive usernames
     mapping(address ethAddress => string hiveUsername) public signerNames;
-    // Using this struct to return signers data
+
+    /// @notice Struct for returning signer information
+    /// @param username The Hive username of the signer
+    /// @param addr The Ethereum address of the signer
     struct signerInfo {
         string username;
         address addr;
     }
 
-    // Require this number of signatures
+    /// @notice Minimum number of signatures required for multisig operations
     uint8 public multisigThreshold;
 
-    // Using nonces to prevent replay attacks
+    /// @notice Nonces to prevent replay attacks for different operations
     uint256 public nonceAddSigner;
     uint256 public nonceRemoveSigner;
     uint256 public nonceUpdateThreshold;
+    uint256 public noncePause;
+    uint256 public nonceUnpause;
 
-    // We need this event to log the username for unwrapping
-    event Unwrap(address messenger, uint256 amount, string username);
+    /// @notice Emitted when tokens are unwrapped (burned) to send back to Hive
+    /// @param messenger The address initiating the unwrap
+    /// @param amount The amount of tokens being unwrapped (3 decimals)
+    /// @param username The Hive username that will receive the native tokens
+    event Unwrap(address indexed messenger, uint256 amount, string username);
 
-    // Events for important actions
+    /// @notice Emitted when tokens are wrapped (minted) from Hive
+    /// @param recipient The address receiving the wrapped tokens
+    /// @param amount The amount of tokens being wrapped (3 decimals)
+    /// @param trxId The Hive transaction ID
+    /// @param opInTrx The operation index within the transaction
+    event Wrap(
+        address indexed recipient,
+        uint256 amount,
+        string trxId,
+        uint32 opInTrx
+    );
+
+    /// @notice Emitted when a new signer is added
+    /// @param signer The address of the new signer
+    /// @param username The Hive username of the new signer
     event SignerAdded(address indexed signer, string username);
+
+    /// @notice Emitted when a signer is removed
+    /// @param signer The address of the removed signer
+    /// @param username The Hive username of the removed signer
     event SignerRemoved(address indexed signer, string username);
+
+    /// @notice Emitted when the multisig threshold is updated
+    /// @param oldThreshold The previous threshold value
+    /// @param newThreshold The new threshold value
     event MultisigThresholdUpdated(uint8 oldThreshold, uint8 newThreshold);
 
-    // Cache address(this) to save gas?
-    address contractAddress = address(this);
+    /// @dev Cached contract address for gas optimization
+    address private immutable contractAddress;
 
-    // Throw this error when can't verify the signatures
+    /// @notice Thrown when signature verification fails
     error InvalidSignatures();
 
+    /// @notice Thrown when not enough signatures provided to satisfy threshold
+    error NotEnoughSignatures();
+
+    /// @notice Thrown when too many signatures are provided
+    error TooManySignatures();
+
+    /// @notice Thrown when trying to add a duplicate signer
+    error SignerAlreadyExists();
+
+    /// @notice Thrown when trying to remove a non-existent signer
+    error SignerDoesNotExist();
+
+    /// @notice Thrown when threshold would be invalid
+    error InvalidThreshold();
+
+    /// @notice Thrown when username is invalid
+    error InvalidUsername();
+
+    /// @notice Thrown when trying to mint tokens that have already been minted
+    error AlreadyMinted();
+
+    /// @notice Thrown when value is zero
+    error MustBeNonZero();
+
+    /// @notice Thrown when signature length is invalid
+    error InvalidSignatureLength();
+
+    /// @notice Initializes the WrappedHive contract
+    /// @param name The name of the token (e.g., "Wrapped HIVE")
+    /// @param symbol The symbol of the token (e.g., "WHIVE")
+    /// @param initialSigner The address of the initial signer
+    /// @param initialUsername The Hive username of the initial signer
     constructor(
         string memory name,
         string memory symbol,
         address initialSigner,
         string memory initialUsername
     ) ERC20(name, symbol) ERC20Permit(name) {
+        contractAddress = address(this);
         multisigThreshold = 1;
         nonceAddSigner = 0;
         nonceRemoveSigner = 0;
         nonceUpdateThreshold = 0;
-        // Add one signer initially
+        noncePause = 0;
+        nonceUnpause = 0;
+
         signers.push(initialSigner);
         signerNames[initialSigner] = initialUsername;
+        emit SignerAdded(initialSigner, initialUsername);
     }
 
-    /// Update the value of multisigThreshold
-    /// @param newThreshold positive value lower than the total number of signers
-    /// @param signatures signed message: "updateMultisigThreshold";newThreshold;nonceUpdateThreshold;contract
+    /// @notice Updates the multisig threshold
+    /// @dev Requires valid signatures from current signers
+    /// @param newThreshold New threshold value (must be > 0 and <= signers.length)
+    /// @param signatures Array of signatures from signers
+    /// Message format: "updateMultisigThreshold;{newThreshold};{nonceUpdateThreshold};{contract}"
     function updateMultisigThreshold(
         uint8 newThreshold,
         bytes[] memory signatures
-    ) public {
+    ) external whenNotPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked(
                 "updateMultisigThreshold",
@@ -74,28 +150,30 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(
-            newThreshold <= signers.length,
-            "multisigThreshold must be less than or equal to signers.length"
-        );
-        require(
-            newThreshold != multisigThreshold,
-            "multisigThreshold is already set to the value requested."
-        );
+
+        if (newThreshold == 0 || newThreshold > signers.length) {
+            revert InvalidThreshold();
+        }
+        if (newThreshold == multisigThreshold) {
+            revert InvalidThreshold();
+        }
+
         emit MultisigThresholdUpdated(multisigThreshold, newThreshold);
         multisigThreshold = newThreshold;
         nonceUpdateThreshold++;
     }
 
-    /// Add new signer
-    /// @param addr Ethereum address of the signer derived from their public active key
-    /// @param username Hive username of the signer
-    /// @param signatures signed message: "addSigner";addr;username;nonceAddSigner;contract
+    /// @notice Adds a new signer to the multisig
+    /// @dev Requires valid signatures from current signers
+    /// @param addr Ethereum address of the new signer
+    /// @param username Hive username of the new signer (3-16 characters)
+    /// @param signatures Array of signatures from current signers
+    /// Message format: "addSigner;{addr};{username};{nonceAddSigner};{contract}"
     function addSigner(
         address addr,
         string memory username,
         bytes[] memory signatures
-    ) public {
+    ) external whenNotPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked(
                 "addSigner",
@@ -110,17 +188,33 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(bytes(signerNames[addr]).length == 0, "Already a signer.");
+
+        if (addr == address(0)) {
+            revert InvalidUsername();
+        }
+        if (bytes(signerNames[addr]).length != 0) {
+            revert SignerAlreadyExists();
+        }
+        uint256 len = bytes(username).length;
+        if (len < 3 || len > 16) {
+            revert InvalidUsername();
+        }
+
         signers.push(addr);
         signerNames[addr] = username;
         nonceAddSigner++;
         emit SignerAdded(addr, username);
     }
 
-    /// Remove a signer
-    /// @param addr Ethereum address of the signer
-    /// @param signatures signed message: "removeSigner";addr;nonceRemoveSigner;contract
-    function removeSigner(address addr, bytes[] memory signatures) public {
+    /// @notice Removes a signer from the multisig
+    /// @dev Requires valid signatures and ensures threshold remains valid
+    /// @param addr Ethereum address of the signer to remove
+    /// @param signatures Array of signatures from current signers
+    /// Message format: "removeSigner;{addr};{nonceRemoveSigner};{contract}"
+    function removeSigner(
+        address addr,
+        bytes[] memory signatures
+    ) external whenNotPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked(
                 "removeSigner",
@@ -133,15 +227,13 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(
-            bytes(signerNames[addr]).length > 0,
-            "Address is not a signer."
-        );
+        if (bytes(signerNames[addr]).length == 0) {
+            revert SignerDoesNotExist();
+        }
         uint256 signerCount = signers.length;
-        require(
-            signerCount - 1 >= multisigThreshold,
-            "multisigThreshold can't be higher than signers.length"
-        );
+        if (multisigThreshold > signerCount - 1) {
+            revert InvalidThreshold();
+        }
         emit SignerRemoved(addr, signerNames[addr]);
         delete signerNames[addr];
         for (uint256 i = 0; i < signerCount; i++) {
@@ -156,17 +248,45 @@ contract WrappedHive is ERC20, ERC20Permit {
         nonceRemoveSigner++;
     }
 
-    /// Mint new tokens
-    /// @param amount token amount without decimals "1.000 HIVE" => 1000
-    /// @param trx_id trx_id from the Hive transaction
-    /// @param op_in_trx op_in_trx from the Hive transaction
-    /// @param signatures signed message: "wrap";address;amount;trx_id;op_in_trx;contract
+    /// @notice Pauses all token transfers and critical operations
+    /// @dev Requires valid signatures from current signers
+    /// @param signatures Array of signatures from current signers
+    /// Message format: "pause;{noncePause};{contract}"
+    function pause(bytes[] memory signatures) external {
+        bytes32 msgHash = keccak256(
+            abi.encodePacked("pause", ";", noncePause, ";", contractAddress)
+        );
+        _validateSignatures(msgHash, signatures);
+        noncePause++;
+        _pause();
+    }
+
+    /// @notice Unpauses all token transfers and critical operations
+    /// @dev Requires valid signatures from current signers
+    /// @param signatures Array of signatures from current signers
+    /// Message format: "unpause;{nonceUnpause};{contract}"
+    function unpause(bytes[] memory signatures) external {
+        bytes32 msgHash = keccak256(
+            abi.encodePacked("unpause", ";", nonceUnpause, ";", contractAddress)
+        );
+        _validateSignatures(msgHash, signatures);
+        nonceUnpause++;
+        _unpause();
+    }
+
+    /// @notice Mints new tokens by wrapping HIVE from the Hive blockchain
+    /// @dev Prevents replay attacks and double-minting
+    /// @param amount Token amount (3 decimals, e.g., 1.000 HIVE = 1000)
+    /// @param trx_id Transaction ID from the Hive blockchain
+    /// @param op_in_trx Operation index within the Hive transaction
+    /// @param signatures Array of signatures from current signers
+    /// Message format: "wrap;{address};{amount};{trx_id};{op_in_trx};{contract}"
     function wrap(
         uint256 amount,
         string memory trx_id,
         uint32 op_in_trx,
         bytes[] memory signatures
-    ) public {
+    ) external whenNotPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked(
                 "wrap",
@@ -183,30 +303,47 @@ contract WrappedHive is ERC20, ERC20Permit {
             )
         );
         _validateSignatures(msgHash, signatures);
-        require(
-            !hasMinted[trx_id][op_in_trx],
-            "Already minted with this (trx_id, op_in_trx)"
-        );
+
+        if (hasMinted[trx_id][op_in_trx]) {
+            revert AlreadyMinted();
+        }
+        if (amount == 0) {
+            revert MustBeNonZero();
+        }
+
         hasMinted[trx_id][op_in_trx] = true;
         _mint(_msgSender(), amount);
+        emit Wrap(_msgSender(), amount, trx_id, op_in_trx);
     }
 
-    /// Burn the tokens and emit an Unwrap event that will be picked up by the bridge nodes
-    /// @param amount token amount without decimals "1.000 HIVE" => 1000
-    /// @param username Hive username that will receive the native tokens
-    function unwrap(uint256 amount, string memory username) public {
+    /// @notice Burns tokens to unwrap them back to the Hive blockchain
+    /// @dev Emits Unwrap event that bridge nodes will process
+    /// @param amount Token amount to burn (3 decimals, e.g., 1.000 HIVE = 1000)
+    /// @param username Hive username that will receive the native tokens (3-16 characters)
+    function unwrap(
+        uint256 amount,
+        string memory username
+    ) external whenNotPaused {
         uint256 len = bytes(username).length;
-        require(len >= 3 && len <= 16, "Username must be 3-16 characters long");
+        if (len < 3 || len > 16) {
+            revert InvalidUsername();
+        }
+        if (amount == 0) {
+            revert MustBeNonZero();
+        }
         _burn(_msgSender(), amount);
         emit Unwrap(_msgSender(), amount, username);
     }
 
-    // HIVE/HBD decimals is 3
+    /// @notice Returns the number of decimals used by the token
+    /// @dev HIVE/HBD uses 3 decimals
+    /// @return The number of decimals (3)
     function decimals() public view virtual override returns (uint8) {
         return 3;
     }
 
-    /// Returns all the signers with their Hive username
+    /// @notice Returns all current signers with their Hive usernames
+    /// @return Array of signerInfo structs containing addresses and usernames
     function getAllSigners() public view returns (signerInfo[] memory) {
         uint256 singerCount = signers.length;
         signerInfo[] memory signerInfos = new signerInfo[](singerCount);
@@ -218,7 +355,10 @@ contract WrappedHive is ERC20, ERC20Permit {
         return signerInfos;
     }
 
-    // Validate multisig signatures based on a threshold
+    /// @dev Validates that enough valid signatures are provided
+    /// @param messageHash The hash of the message that was signed
+    /// @param signatures Array of signatures to validate
+    /// @return true if validation succeeds (reverts otherwise)
     function _validateSignatures(
         bytes32 messageHash,
         bytes[] memory signatures
@@ -226,32 +366,21 @@ contract WrappedHive is ERC20, ERC20Permit {
         uint256 signatureCount = signatures.length;
         uint8 threshold = multisigThreshold;
         uint256 signerCount = signers.length;
-        require(
-            signatureCount >= threshold,
-            "Not enought signatures to satisfy multisigThreshold."
-        );
-        require(
-            signatureCount <= signerCount,
-            "signatureCount shouldn't be higher than signerCount"
-        );
+
+        if (signatureCount < threshold) {
+            revert NotEnoughSignatures();
+        }
+        if (signatureCount > signerCount) {
+            revert TooManySignatures();
+        }
+
         uint256 validSignatures;
         address[] memory seen = new address[](signerCount);
         uint256 seenCount = 0;
+
         for (uint256 i = 0; i < signatureCount; i++) {
-            bytes memory sig = signatures[i];
-            require(sig.length == 65, "Signatures must be 65 characters long.");
-            uint8 v;
-            bytes32 r;
-            bytes32 s;
-            assembly {
-                // first 32 bytes, after the length prefix.
-                r := mload(add(sig, 32))
-                // second 32 bytes.
-                s := mload(add(sig, 64))
-                // final byte (first byte of the next 32 bytes).
-                v := byte(0, mload(add(sig, 96)))
-            }
-            address recovered = ecrecover(messageHash, v, r, s);
+            address recovered = _recoverSigner(messageHash, signatures[i]);
+
             if (
                 bytes(signerNames[recovered]).length > 0 &&
                 !_alreadySeen(seen, seenCount, recovered)
@@ -259,15 +388,49 @@ contract WrappedHive is ERC20, ERC20Permit {
                 seen[seenCount] = recovered;
                 seenCount++;
                 validSignatures++;
+
                 if (validSignatures >= threshold) {
                     return true;
                 }
             }
         }
+
         revert InvalidSignatures();
     }
 
-    // Find out if we have already seen a signer
+    /// @dev Recovers the signer address from a signature
+    /// @param messageHash The hash of the message that was signed
+    /// @param signature The signature bytes (must be 65 bytes)
+    /// @return The recovered signer address
+    function _recoverSigner(
+        bytes32 messageHash,
+        bytes memory signature
+    ) internal pure returns (address) {
+        if (signature.length != 65) {
+            revert InvalidSignatureLength();
+        }
+
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+
+        assembly {
+            // first 32 bytes, after the length prefix.
+            r := mload(add(signature, 32))
+            // second 32 bytes.
+            s := mload(add(signature, 64))
+            // final byte (first byte of the next 32 bytes).
+            v := byte(0, mload(add(signature, 96)))
+        }
+
+        return ecrecover(messageHash, v, r, s);
+    }
+
+    /// @dev Checks if an address has already been counted in signature validation
+    /// @param seen Array of addresses that have been seen
+    /// @param seenCount Number of addresses in the seen array
+    /// @param addr Address to check
+    /// @return true if the address has been seen, false otherwise
     function _alreadySeen(
         address[] memory seen,
         uint256 seenCount,
