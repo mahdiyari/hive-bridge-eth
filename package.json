@@ -1,10 +1,38 @@
 {
   "name": "hive-bridge-eth",
   "version": "1.0.0",
+  "description": "A production-ready bridge contract for wrapping HIVE tokens on Ethereum",
   "type": "module",
   "scripts": {
     "build": "hardhat build",
-    "test": "hardhat test nodejs"
+    "build:production": "hardhat build --profile production",
+    "test": "hardhat test nodejs",
+    "test:solidity": "hardhat test solidity",
+    "test:all": "npm run test && npm run test:solidity",
+    "test:comprehensive": "hardhat test nodejs --grep Comprehensive",
+    "deploy:local": "hardhat ignition deploy ignition/modules/WrappedHive.ts --network localhost",
+    "deploy:sepolia": "hardhat ignition deploy ignition/modules/WrappedHive.ts --network sepolia",
+    "deploy:mainnet": "hardhat ignition deploy ignition/modules/WrappedHive.ts --network mainnet",
+    "node": "hardhat node",
+    "console:local": "hardhat console --network localhost",
+    "console:sepolia": "hardhat console --network sepolia",
+    "clean": "hardhat clean",
+    "compile": "hardhat compile",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "hive",
+    "bridge",
+    "ethereum",
+    "erc20",
+    "blockchain",
+    "wrapped-token"
+  ],
+  "author": "mahdiyari",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mahdiyari/hive-bridge-eth.git"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition": "^3.0.3",
