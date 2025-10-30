@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "hardhat build",
-    "build:production": "hardhat build --profile production",
+    "build:production": "hardhat build --build-profile production",
     "test": "hardhat test nodejs",
     "test:solidity": "hardhat test solidity",
     "test:all": "npm run test && npm run test:solidity",
