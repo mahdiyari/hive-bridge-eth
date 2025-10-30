@@ -4,13 +4,11 @@
     "settings": {
       "optimizer": {
         "enabled": true,
-        "runs": 331337
+        "runs": 1000000
       },
       "outputSelection": {
         "*": {
-          "": [
-            "ast"
-          ],
+          "": ["ast"],
           "*": [
             "abi",
             "metadata",
