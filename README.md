@@ -1,57 +1,145 @@
-# Sample Hardhat 3 Beta Project (`node:test` and `viem`)
+# WrappedHive - HIVE Bridge for Ethereum
 
-This project showcases a Hardhat 3 Beta project using the native Node.js test runner (`node:test`) and the `viem` library for Ethereum interactions.
+A bridge contract for wrapping HIVE/HBD tokens on Ethereum and compatible EVM chains.
 
-To learn more about the Hardhat 3 Beta, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3 Beta](https://hardhat.org/hardhat3-beta-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+## Features
 
-## Project Overview
+- ERC20 compliant token with gasless approvals (EIP-2612)
+- Multisig-controlled governance for security
+- Prevents double minting and replay attacks
+- Emergency pause functionality
+- Optimized for gas efficiency
 
-This example project includes:
+## Architecture
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using [`node:test`](nodejs.org/api/test.html), the new Node.js native test runner, and [`viem`](https://viem.sh/).
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+Hive Blockchain ↔ Bridge Nodes ↔ WrappedHive Contract
 
-## Usage
+## Contract Details
+
+- **Decimals**: 3 (matching HIVE precision)
+- **Standards**: ERC20, ERC20Permit
+- **Security**: Multisig, Pausable, Custom errors
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+ and npm
+- Git
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/mahdiyari/hive-bridge-eth.git
+cd hive-bridge-eth
+
+# Install dependencies
+npm install
+
+# Build contracts
+npx hardhat build
+```
 
 ### Running Tests
 
-To run all the tests in the project, execute the following command:
+```bash
+# Run all tests
+npm test
 
-```shell
-npx hardhat test
+# Run comprehensive test suite
+npm run test:comprehensive
 ```
 
-You can also selectively run the Solidity or `node:test` tests:
+## Deployment
 
-```shell
-npx hardhat test solidity
-npx hardhat test nodejs
-```
+### Quick Start - Testnet
 
-### Make a deployment to Sepolia
-
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
-
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
-```
-
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
-
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
-
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
-
-```shell
+```bash
+# Configure testnet private key
 npx hardhat keystore set SEPOLIA_PRIVATE_KEY
+
+# Deploy to Sepolia
+npm run deploy:sepolia
 ```
 
-After setting the variable, you can run the deployment with the Sepolia network:
+## Usage
 
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
+### For Users
+
+#### Wrapping HIVE → Wrapped HIVE
+
+1. Send HIVE/HBD to the bridge address on Hive blockchain with memo containing your Ethereum address e.g. `ETH:0x1234...`
+2. Bridge nodes detect the transaction and create signatures
+3. Call `wrap()` with the signatures to mint tokens on Ethereum
+
+#### Unwrapping Wrapped HIVE → HIVE
+
+1. Call `unwrap(amount, hiveUsername)` on the contract
+2. Bridge nodes detect the Unwrap event
+3. HIVE tokens sent to your Hive account after 12 confirmations
+
+### For Developers
+
+```javascript
+// Import the contract ABI
+import WrappedHiveABI from './artifacts/contracts/WrappedHive.sol/WrappedHive.json'
+
+// Create contract instance
+const contract = new ethers.Contract(
+  contractAddress,
+  WrappedHiveABI.abi,
+  signer
+)
+
+// Check balance
+const balance = await contract.balanceOf(userAddress)
+
+// Unwrap tokens
+await contract.unwrap(ethers.parseUnits('10', 3), 'hive-username')
+
+// Get all signers
+const signers = await contract.getAllSigners()
 ```
+
+## API Reference
+
+### Core Functions
+
+#### `wrap(uint256 amount, string trx_id, uint32 op_in_trx, bytes[] signatures)`
+
+Mints new tokens by wrapping HIVE from Hive blockchain.
+
+- **amount**: Token amount (3 decimals, e.g., 1.000 HIVE = 1000)
+- **trx_id**: Hive transaction ID
+- **op_in_trx**: Operation index in the transaction
+- **signatures**: Array of signatures from bridge signers
+
+#### `unwrap(uint256 amount, string username)`
+
+Burns tokens to unwrap back to Hive blockchain.
+
+- **amount**: Token amount to burn (3 decimals)
+- **username**: Hive username to receive tokens (3-16 characters)
+
+### Governance Functions
+
+#### `addSigner(address addr, string username, bytes[] signatures)`
+
+Adds a new authorized signer (requires multisig approval).
+
+#### `removeSigner(address addr, bytes[] signatures)`
+
+Removes an authorized signer (requires multisig approval).
+
+#### `updateMultisigThreshold(uint8 newThreshold, bytes[] signatures)`
+
+Updates the number of required signatures (requires multisig approval).
+
+#### `pause(bytes[] signatures)` / `unpause(bytes[] signatures)`
+
+Emergency pause/unpause functions (requires multisig approval).
+
+## License
+
+GPL-3.0 - see LICENSE file.
