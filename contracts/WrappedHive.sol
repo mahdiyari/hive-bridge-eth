@@ -252,7 +252,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @dev Requires valid signatures from current signers
     /// @param signatures Array of signatures from current signers
     /// Message format: "pause;{noncePause};{contract}"
-    function pause(bytes[] memory signatures) external {
+    function pause(bytes[] memory signatures) external whenNotPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked("pause", ";", noncePause, ";", contractAddress)
         );
@@ -265,7 +265,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @dev Requires valid signatures from current signers
     /// @param signatures Array of signatures from current signers
     /// Message format: "unpause;{nonceUnpause};{contract}"
-    function unpause(bytes[] memory signatures) external {
+    function unpause(bytes[] memory signatures) external whenPaused {
         bytes32 msgHash = keccak256(
             abi.encodePacked("unpause", ";", nonceUnpause, ";", contractAddress)
         );
