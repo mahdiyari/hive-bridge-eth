@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 /// @title WrappedHive - A bridge token for HIVE blockchain
 /// @notice This contract implements a wrapped version of HIVE token with multisig governance
 /// @dev Implements ERC20, ERC20Permit for gasless approvals, and Pausable for emergency stops
-/// @dev No reentrancy protection needed - contract has no external calls or value transfers
+/// @dev Messages are signed raw on client side without the prefix of EIP-712.
 contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @notice Tracks whether tokens have been minted for a specific Hive transaction
     /// @dev Prevents double-minting by tracking (trx_id, op_in_trx) combinations
@@ -116,6 +116,10 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         address initialSigner,
         string memory initialUsername
     ) ERC20(name, symbol) ERC20Permit(name) {
+        if (initialSigner == address(0)) {
+            revert MustBeNonZero();
+        }
+
         contractAddress = address(this);
         multisigThreshold = 1;
         nonceAddSigner = 0;
@@ -190,7 +194,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         _validateSignatures(msgHash, signatures);
 
         if (addr == address(0)) {
-            revert InvalidUsername();
+            revert MustBeNonZero();
         }
         if (bytes(signerNames[addr]).length != 0) {
             revert SignerAlreadyExists();
@@ -345,12 +349,14 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @notice Returns all current signers with their Hive usernames
     /// @return Array of signerInfo structs containing addresses and usernames
     function getAllSigners() public view returns (signerInfo[] memory) {
-        uint256 singerCount = signers.length;
-        signerInfo[] memory signerInfos = new signerInfo[](singerCount);
-        for (uint256 i = 0; i < singerCount; i++) {
+        uint256 signerCount = signers.length;
+        signerInfo[] memory signerInfos = new signerInfo[](signerCount);
+        for (uint256 i = 0; i < signerCount; i++) {
             address signer = signers[i];
-            string memory username = signerNames[signer];
-            signerInfos[i] = signerInfo({addr: signer, username: username});
+            signerInfos[i] = signerInfo({
+                addr: signer,
+                username: signerNames[signer]
+            });
         }
         return signerInfos;
     }
@@ -409,21 +415,27 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         if (signature.length != 65) {
             revert InvalidSignatureLength();
         }
-
         uint8 v;
         bytes32 r;
         bytes32 s;
-
-        assembly {
-            // first 32 bytes, after the length prefix.
-            r := mload(add(signature, 32))
-            // second 32 bytes.
-            s := mload(add(signature, 64))
-            // final byte (first byte of the next 32 bytes).
-            v := byte(0, mload(add(signature, 96)))
+        assembly ("memory-safe") {
+            r := mload(add(signature, 0x20))
+            s := mload(add(signature, 0x40))
+            v := byte(0, mload(add(signature, 0x60)))
         }
-
-        return ecrecover(messageHash, v, r, s);
+        // EIP-2 still allows signature malleability for ecrecover().
+        // Remove this possibility and make the signature unique.
+        if (
+            uint256(s) >
+            0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0
+        ) {
+            revert InvalidSignatureLength();
+        }
+        address signer = ecrecover(messageHash, v, r, s);
+        if (signer == address(0)) {
+            revert InvalidSignatureLength();
+        }
+        return signer;
     }
 
     /// @dev Checks if an address has already been counted in signature validation
@@ -442,5 +454,14 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
             }
         }
         return false;
+    }
+
+    /// Override the _update function to pause transfers when contract is paused
+    function _update(
+        address from,
+        address to,
+        uint256 value
+    ) internal virtual override whenNotPaused {
+        super._update(from, to, value);
     }
 }
