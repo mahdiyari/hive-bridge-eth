@@ -346,6 +346,32 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         return 3;
     }
 
+    /// @notice Returns all nonces in a single call
+    /// @return _addSigner Nonce for addSigner operation
+    /// @return _removeSigner Nonce for removeSigner operation
+    /// @return _updateThreshold Nonce for updateMultisigThreshold operation
+    /// @return _pause Nonce for pause operation
+    /// @return _unpause Nonce for unpause operation
+    function getAllNonces()
+        public
+        view
+        returns (
+            uint256 _addSigner,
+            uint256 _removeSigner,
+            uint256 _updateThreshold,
+            uint256 _pause,
+            uint256 _unpause
+        )
+    {
+        return (
+            nonceAddSigner,
+            nonceRemoveSigner,
+            nonceUpdateThreshold,
+            noncePause,
+            nonceUnpause
+        );
+    }
+
     /// @notice Returns all current signers with their Hive usernames
     /// @return Array of signerInfo structs containing addresses and usernames
     function getAllSigners() public view returns (signerInfo[] memory) {
