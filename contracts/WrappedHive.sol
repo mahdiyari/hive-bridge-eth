@@ -362,10 +362,11 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         // Hardcoding it here might be a bad idea
         // Other parts should be fine
         // but unwrap not working for new accounts would be problematic
-        // uint256 len = bytes(username).length;
-        // if (len < 3 || len > 16) {
-        //     revert InvalidUsername();
-        // }
+        // Only do basic validation
+        uint256 len = bytes(username).length;
+        if (len < 1 || len > 512) {
+            revert InvalidUsername();
+        }
         if (amount == 0) {
             revert MustBeNonZero();
         }
