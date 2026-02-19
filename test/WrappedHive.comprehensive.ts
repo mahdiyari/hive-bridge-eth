@@ -26,7 +26,8 @@ const hashMintMsg = (
   amount: bigint,
   trxId: string,
   opInTrx: number,
-  contractAddress: `0x${string}`
+  contractAddress: `0x${string}`,
+  chainId: bigint
 ) => {
   return keccak256(
     encodePacked(
@@ -42,6 +43,8 @@ const hashMintMsg = (
         'uint32',
         'string',
         'address',
+        'string',
+        'uint256',
       ],
       [
         'wrap',
@@ -55,6 +58,8 @@ const hashMintMsg = (
         opInTrx,
         ';',
         contractAddress,
+        ';',
+        chainId,
       ]
     )
   )
@@ -64,7 +69,8 @@ const hashAddSigner = (
   addr: `0x${string}`,
   username: string,
   nonce: bigint,
-  contractAddress: `0x${string}`
+  contractAddress: `0x${string}`,
+  chainId: bigint
 ) => {
   return keccak256(
     encodePacked(
@@ -78,8 +84,22 @@ const hashAddSigner = (
         'uint256',
         'string',
         'address',
+        'string',
+        'uint256',
       ],
-      ['addSigner', ';', addr, ';', username, ';', nonce, ';', contractAddress]
+      [
+        'addSigner',
+        ';',
+        addr,
+        ';',
+        username,
+        ';',
+        nonce,
+        ';',
+        contractAddress,
+        ';',
+        chainId,
+      ]
     )
   )
 }
@@ -87,11 +107,22 @@ const hashAddSigner = (
 const hashUpdateThreshold = (
   newThreshold: number,
   nonce: bigint,
-  contractAddress: `0x${string}`
+  contractAddress: `0x${string}`,
+  chainId: bigint
 ) => {
   return keccak256(
     encodePacked(
-      ['string', 'string', 'uint8', 'string', 'uint256', 'string', 'address'],
+      [
+        'string',
+        'string',
+        'uint8',
+        'string',
+        'uint256',
+        'string',
+        'address',
+        'string',
+        'uint256',
+      ],
       [
         'updateMultisigThreshold',
         ';',
@@ -100,13 +131,42 @@ const hashUpdateThreshold = (
         nonce,
         ';',
         contractAddress,
+        ';',
+        chainId,
       ]
+    )
+  )
+}
+
+const hashPause = (
+  nonce: bigint,
+  contractAddress: `0x${string}`,
+  chainId: bigint
+) => {
+  return keccak256(
+    encodePacked(
+      ['string', 'string', 'uint256', 'string', 'address', 'string', 'uint256'],
+      ['pause', ';', nonce, ';', contractAddress, ';', chainId]
+    )
+  )
+}
+
+const hashUnpause = (
+  nonce: bigint,
+  contractAddress: `0x${string}`,
+  chainId: bigint
+) => {
+  return keccak256(
+    encodePacked(
+      ['string', 'string', 'uint256', 'string', 'address', 'string', 'uint256'],
+      ['unpause', ';', nonce, ';', contractAddress, ';', chainId]
     )
   )
 }
 
 describe('WrappedHive - Comprehensive Tests', async function () {
   const { viem } = await network.connect()
+  const chainId = BigInt(await (await viem.getPublicClient()).getChainId())
 
   describe('Deployment', function () {
     it('should deploy with correct initial values', async function () {
@@ -174,7 +234,8 @@ describe('WrappedHive - Comprehensive Tests', async function () {
         amount,
         trxId,
         opInTrx,
-        contractAddress
+        contractAddress,
+        chainId
       )
       const signature = await accounts[0].sign({ hash })
 
@@ -207,7 +268,8 @@ describe('WrappedHive - Comprehensive Tests', async function () {
         amount,
         trxId,
         opInTrx,
-        contractAddress
+        contractAddress,
+        chainId
       )
       const signature = await accounts[0].sign({ hash })
 
@@ -238,7 +300,8 @@ describe('WrappedHive - Comprehensive Tests', async function () {
         signers[1],
         'newsigner',
         nonce,
-        contractAddress
+        contractAddress,
+        chainId
       )
       const signature = await accounts[0].sign({ hash })
 
@@ -261,7 +324,13 @@ describe('WrappedHive - Comprehensive Tests', async function () {
 
       // Add second signer
       let nonce = await wHIVE.read.nonceAddSigner()
-      let hash = hashAddSigner(signers[1], 'signer2', nonce, contractAddress)
+      let hash = hashAddSigner(
+        signers[1],
+        'signer2',
+        nonce,
+        contractAddress,
+        chainId
+      )
       let signature = await accounts[0].sign({ hash })
       await wHIVE.write.addSigner([signers[1], 'signer2', [signature]], {
         account: accounts[0],
@@ -269,7 +338,7 @@ describe('WrappedHive - Comprehensive Tests', async function () {
 
       // Update threshold
       nonce = await wHIVE.read.nonceUpdateThreshold()
-      hash = hashUpdateThreshold(2, nonce, contractAddress)
+      hash = hashUpdateThreshold(2, nonce, contractAddress, chainId)
       signature = await accounts[0].sign({ hash })
       await wHIVE.write.updateMultisigThreshold([2, [signature]], {
         account: accounts[0],
@@ -277,6 +346,99 @@ describe('WrappedHive - Comprehensive Tests', async function () {
 
       const threshold = await wHIVE.read.multisigThreshold()
       assert.equal(threshold, 2)
+    })
+  })
+
+  describe('Pause/Unpause Operations', function () {
+    it('should pause and block token operations', async function () {
+      const wHIVE = await viem.deployContract('WrappedHive', [
+        'Wrapped HIVE',
+        'WHIVE',
+        signers[0],
+        'signer1',
+      ])
+      const contractAddress = wHIVE.address
+
+      const trxId = 'pause-setup-wrap'
+      const opInTrx = 0
+      const amount = 5000n
+      const wrapHash = hashMintMsg(
+        signers[1],
+        amount,
+        trxId,
+        opInTrx,
+        contractAddress,
+        chainId
+      )
+      const wrapSignature = await accounts[0].sign({ hash: wrapHash })
+      await wHIVE.write.wrap([amount, trxId, opInTrx, [wrapSignature]], {
+        account: accounts[1],
+      })
+
+      const pauseNonce = await wHIVE.read.noncePause()
+      const pauseHash = hashPause(pauseNonce, contractAddress, chainId)
+      const pauseSignature = await accounts[0].sign({ hash: pauseHash })
+      await wHIVE.write.pause([[pauseSignature]], { account: accounts[0] })
+
+      const paused = await wHIVE.read.paused()
+      assert.equal(paused, true)
+
+      await assert.rejects(
+        wHIVE.write.transfer([signers[2], 1000n], {
+          account: accounts[1],
+        })
+      )
+
+      await assert.rejects(
+        wHIVE.write.unwrap([1000n, 'receiveruser'], {
+          account: accounts[1],
+        })
+      )
+    })
+
+    it('should unpause and allow token operations again', async function () {
+      const wHIVE = await viem.deployContract('WrappedHive', [
+        'Wrapped HIVE',
+        'WHIVE',
+        signers[0],
+        'signer1',
+      ])
+      const contractAddress = wHIVE.address
+
+      const trxId = 'unpause-setup-wrap'
+      const opInTrx = 0
+      const amount = 5000n
+      const wrapHash = hashMintMsg(
+        signers[1],
+        amount,
+        trxId,
+        opInTrx,
+        contractAddress,
+        chainId
+      )
+      const wrapSignature = await accounts[0].sign({ hash: wrapHash })
+      await wHIVE.write.wrap([amount, trxId, opInTrx, [wrapSignature]], {
+        account: accounts[1],
+      })
+
+      let nonce = await wHIVE.read.noncePause()
+      let hash = hashPause(nonce, contractAddress, chainId)
+      let signature = await accounts[0].sign({ hash })
+      await wHIVE.write.pause([[signature]], { account: accounts[0] })
+
+      nonce = await wHIVE.read.nonceUnpause()
+      hash = hashUnpause(nonce, contractAddress, chainId)
+      signature = await accounts[0].sign({ hash })
+      await wHIVE.write.unpause([[signature]], { account: accounts[0] })
+
+      const paused = await wHIVE.read.paused()
+      assert.equal(paused, false)
+
+      await wHIVE.write.transfer([signers[2], 1000n], {
+        account: accounts[1],
+      })
+      const recipientBalance = await wHIVE.read.balanceOf([signers[2]])
+      assert.equal(recipientBalance, 1000n)
     })
   })
 })

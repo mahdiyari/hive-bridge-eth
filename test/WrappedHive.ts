@@ -25,7 +25,8 @@ const hashMintMsg = (
   amount: bigint,
   trxId: string,
   opInTrx: number,
-  contractAddress: `0x${string}`
+  contractAddress: `0x${string}`,
+  chainId: bigint
 ) => {
   return keccak256(
     encodePacked(
@@ -41,6 +42,8 @@ const hashMintMsg = (
         'uint32',
         'string',
         'address',
+        'string',
+        'uint256',
       ],
       [
         'wrap',
@@ -54,6 +57,8 @@ const hashMintMsg = (
         opInTrx,
         ';',
         contractAddress,
+        ';',
+        chainId,
       ]
     )
   )
@@ -69,6 +74,7 @@ describe('WrappedHive', async function () {
     'randomuser',
   ])
   const contractAddress = wHIVE.address
+  const chainId = BigInt(await (await viem.getPublicClient()).getChainId())
 
   it('should have total supply equal to all minted tokens', async function () {
     const trxId = '0000000000000000000000000000000000000000'
@@ -79,7 +85,8 @@ describe('WrappedHive', async function () {
       amount,
       trxId,
       opInTrx,
-      contractAddress
+      contractAddress,
+      chainId
     )
     const signature = await accounts[0].sign({ hash })
     await wHIVE.write.wrap([amount, trxId, opInTrx, [signature]], {
@@ -98,7 +105,8 @@ describe('WrappedHive', async function () {
       amount,
       trxId,
       opInTrx,
-      contractAddress
+      contractAddress,
+      chainId
     )
     const signature = await accounts[0].sign({ hash })
     assert.rejects(

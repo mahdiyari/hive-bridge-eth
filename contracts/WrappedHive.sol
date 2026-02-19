@@ -74,6 +74,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
 
     /// @dev Cached contract address for gas optimization
     address private immutable contractAddress;
+    uint256 private immutable chainId;
 
     /// @notice Thrown when signature verification fails
     error InvalidSignatures();
@@ -119,8 +120,13 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
         if (initialSigner == address(0)) {
             revert MustBeNonZero();
         }
+        uint256 len = bytes(initialUsername).length;
+        if (len < 3 || len > 16) {
+            revert InvalidUsername();
+        }
 
         contractAddress = address(this);
+        chainId = block.chainid;
         multisigThreshold = 1;
         nonceAddSigner = 0;
         nonceRemoveSigner = 0;
@@ -137,7 +143,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @dev Requires valid signatures from current signers
     /// @param newThreshold New threshold value (must be > 0 and <= signers.length)
     /// @param signatures Array of signatures from signers
-    /// Message format: "updateMultisigThreshold;{newThreshold};{nonceUpdateThreshold};{contract}"
+    /// Message format: "updateMultisigThreshold;{newThreshold};{nonceUpdateThreshold};{contract};{chainId}"
     function updateMultisigThreshold(
         uint8 newThreshold,
         bytes[] memory signatures
@@ -150,7 +156,9 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
                 ";",
                 nonceUpdateThreshold,
                 ";",
-                contractAddress
+                contractAddress,
+                ";",
+                chainId
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -172,7 +180,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @param addr Ethereum address of the new signer
     /// @param username Hive username of the new signer (3-16 characters)
     /// @param signatures Array of signatures from current signers
-    /// Message format: "addSigner;{addr};{username};{nonceAddSigner};{contract}"
+    /// Message format: "addSigner;{addr};{username};{nonceAddSigner};{contract};{chainId}"
     function addSigner(
         address addr,
         string memory username,
@@ -188,7 +196,9 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
                 ";",
                 nonceAddSigner,
                 ";",
-                contractAddress
+                contractAddress,
+                ";",
+                chainId
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -214,7 +224,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @dev Requires valid signatures and ensures threshold remains valid
     /// @param addr Ethereum address of the signer to remove
     /// @param signatures Array of signatures from current signers
-    /// Message format: "removeSigner;{addr};{nonceRemoveSigner};{contract}"
+    /// Message format: "removeSigner;{addr};{nonceRemoveSigner};{contract};{chainId}"
     function removeSigner(
         address addr,
         bytes[] memory signatures
@@ -227,7 +237,9 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
                 ";",
                 nonceRemoveSigner,
                 ";",
-                contractAddress
+                contractAddress,
+                ";",
+                chainId
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -255,10 +267,18 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @notice Pauses all token transfers and critical operations
     /// @dev Requires valid signatures from current signers
     /// @param signatures Array of signatures from current signers
-    /// Message format: "pause;{noncePause};{contract}"
+    /// Message format: "pause;{noncePause};{contract};{chainId}"
     function pause(bytes[] memory signatures) external whenNotPaused {
         bytes32 msgHash = keccak256(
-            abi.encodePacked("pause", ";", noncePause, ";", contractAddress)
+            abi.encodePacked(
+                "pause",
+                ";",
+                noncePause,
+                ";",
+                contractAddress,
+                ";",
+                chainId
+            )
         );
         _validateSignatures(msgHash, signatures);
         noncePause++;
@@ -268,10 +288,18 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @notice Unpauses all token transfers and critical operations
     /// @dev Requires valid signatures from current signers
     /// @param signatures Array of signatures from current signers
-    /// Message format: "unpause;{nonceUnpause};{contract}"
+    /// Message format: "unpause;{nonceUnpause};{contract};{chainId}"
     function unpause(bytes[] memory signatures) external whenPaused {
         bytes32 msgHash = keccak256(
-            abi.encodePacked("unpause", ";", nonceUnpause, ";", contractAddress)
+            abi.encodePacked(
+                "unpause",
+                ";",
+                nonceUnpause,
+                ";",
+                contractAddress,
+                ";",
+                chainId
+            )
         );
         _validateSignatures(msgHash, signatures);
         nonceUnpause++;
@@ -284,7 +312,7 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @param trx_id Transaction ID from the Hive blockchain
     /// @param op_in_trx Operation index within the Hive transaction
     /// @param signatures Array of signatures from current signers
-    /// Message format: "wrap;{address};{amount};{trx_id};{op_in_trx};{contract}"
+    /// Message format: "wrap;{address};{amount};{trx_id};{op_in_trx};{contract};{chainId}"
     function wrap(
         uint256 amount,
         string memory trx_id,
@@ -303,7 +331,9 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
                 ";",
                 op_in_trx,
                 ";",
-                contractAddress
+                contractAddress,
+                ";",
+                chainId
             )
         );
         _validateSignatures(msgHash, signatures);
@@ -323,15 +353,19 @@ contract WrappedHive is ERC20, ERC20Permit, Pausable {
     /// @notice Burns tokens to unwrap them back to the Hive blockchain
     /// @dev Emits Unwrap event that bridge nodes will process
     /// @param amount Token amount to burn (3 decimals, e.g., 1.000 HIVE = 1000)
-    /// @param username Hive username that will receive the native tokens (3-16 characters)
+    /// @param username Hive username that will receive the native tokens
     function unwrap(
         uint256 amount,
         string memory username
     ) external whenNotPaused {
-        uint256 len = bytes(username).length;
-        if (len < 3 || len > 16) {
-            revert InvalidUsername();
-        }
+        // There is chance that username format changes on Hive later
+        // Hardcoding it here might be a bad idea
+        // Other parts should be fine
+        // but unwrap not working for new accounts would be problematic
+        // uint256 len = bytes(username).length;
+        // if (len < 3 || len > 16) {
+        //     revert InvalidUsername();
+        // }
         if (amount == 0) {
             revert MustBeNonZero();
         }
